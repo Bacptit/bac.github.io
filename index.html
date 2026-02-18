@@ -124,6 +124,12 @@ function render() {
     drawGroup(edgePoints, 1, 2);
     drawGroup(centerPoints, 1, 2);
 
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 32px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Thủy ❤️", CENTER_X, CENTER_Y);
+
     frame++;
     setTimeout(() => {
       requestAnimationFrame(render);
