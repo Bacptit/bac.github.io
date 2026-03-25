@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Yêu em</title>
+<style>
+    body {
+        margin: 0;
+        background: black;
+        overflow: hidden;
+    }
+</style>
+</head>
+<body>
+  <a href=""> Download</a>
+  import tkinter as tk
+from tkinter import ttk
+
+import ctypes
+from PIL import Image, ImageTk
+import win32gui
+import win32ui
+
+
+class WindowCaptureApp:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("Window")
+        self.root.configure(bg="#111111")
+        self.root.geometry("1280x720")
+        self.root.minsize(900, 560)
+
+        self.window_map: dict[str, int] = {}
+        self.capture_job = None
+        self.preview_image = None
+        self.current_hwnd = None
+        self.client_only_var = tk.BooleanVar(value=False)
+        self.fullscreen_var = tk.BooleanVar(value=False)
+        self.fps_var = tk.StringVar(value="60")
+        self.top_bar_visible = True
+
+        self._build_ui()
+        self.refresh_windows()
+
+        self.root.bind("<Escape>", self._on_escape)
+        self.root.bind("<F11>", self._on_f11)
+
+    def _build_ui(self) -> None:
+        self.top_bar = tk.Frame(self.root, bg="#1a1a1a", height=56)
+        self.top_bar.pack(fill="x", side="top")
+
+        title = tk.Label(
+            self.top_bar,
+            text="Window Capture Realtime",
+            fg="white",
+            bg=self.top_bar["bg"],
+            font=("Segoe UI", 13, "bold"),
+        )
+        title.pack(side="left", padx=16)
+
+        self.window_var = tk.StringVar()
+        self.window_combo = ttk.Combobox(
+            self.top_bar,
+            textvariable=self.window_var,
+            state="readonly",
+            width=75,
+        )
+        self.window_combo.pack(side="left", padx=12, pady=10)
+        self.window_combo.bind("<<ComboboxSelected>>", self._on_window_selected)
+
+        refresh_btn = tk.Button(
+            self.top_bar,
+            text="Refresh windows",
+            command=self.refresh_windows,
+            bg="#2b2b2b",
+            fg="white",
+            relief="flat",
+            padx=12,
+            pady=5,
+        )
+        refresh_btn.pack(side="left", padx=6)
+
+        client_only_check = tk.Checkbutton(
+            self.top_bar,
+            text="Client area only",
+            variable=self.client_only_var,
+            command=self._on_client_only_changed,
+            bg=self.top_bar["bg"],
+            fg="white",
+            activebackground=self.top_bar["bg"],
+            activeforeground="white",
+            selectcolor="#2b2b2b",
+            relief="flat",
+            padx=8,
+        )
+        client_only_check.pack(side="left", padx=8)
+
+        fullscreen_check = tk.Checkbutton(
+            self.top_bar,
+            text="Fullscreen (F11)",
+            variable=self.fullscreen_var,
+            command=self._on_fullscreen_changed,
+            bg=self.top_bar["bg"],
+            fg="white",
+            activebackground=self.top_bar["bg"],
+            activeforeground="white",
+            selectcolor="#2b2b2b",
+            relief="flat",
+            padx=8,
+        )
+        fullscreen_check.pack(side="left", padx=8)
+
+        fps_label = tk.Label(
+            self.top_bar,
+            text="FPS:",
+            fg="white",
+            bg=self.top_bar["bg"],
+            font=("Segoe UI", 10),
+        )
+        fps_label.pack(side="left", padx=(12, 4))
+
+        self.fps_combo = ttk.Combobox(
+            self.top_bar,
+            textvariable=self.fps_var,
+            state="readonly",
+            width=5,
+            values=("30", "60", "90", "120"),
+        )
+        self.fps_combo.pack(side="left", padx=(0, 8))
+        self.fps_combo.bind("<<ComboboxSelected>>", self._on_fps_changed)
+
+        exit_btn = tk.Button(
+            self.top_bar,
+            text="Exit (Esc)",
+            command=self._exit_app,
+            bg="#992222",
+            fg="white",
+            relief="flat",
+            padx=12,
+            pady=5,
+        )
+        exit_btn.pack(side="right", padx=16)
+
+        preview_frame = tk.Frame(self.root, bg="#111111")
+        preview_frame.pack(fill="both", expand=True)
+
+        self.preview_label = tk.Label(
+            preview_frame,
+            text="Chọn một window để xem capture.",
+            fg="#dddddd",
+            bg="#111111",
+            font=("Segoe UI", 16),
+        )
+        self.preview_label.pack(fill="both", expand=True)
+
+    def refresh_windows(self) -> None:
+        new_map: dict[str, int] = {}
+
+        def callback(hwnd: int, _extra: object) -> bool:
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+
+            title = win32gui.GetWindowText(hwnd).strip()
+            if not title:
+                return True
+
+            if title == self.root.title():
+                return True
+
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if right - left <= 0 or bottom - top <= 0:
+                return True
+
+            key = f"{title} (HWND: {hwnd})"
+            new_map[key] = hwnd
+            return True
+
+        win32gui.EnumWindows(callback, None)
+
+        self.window_map = dict(sorted(new_map.items(), key=lambda item: item[0].lower()))
+        values = list(self.window_map.keys())
+        self.window_combo["values"] = values
+
+        if not values:
+            self.window_var.set("")
+            self.current_hwnd = None
+            self._set_status("Không tìm thấy window nào đang mở.")
+            return
+
+        # Giữ lựa chọn cũ nếu vẫn còn
+        current_label = self.window_var.get()
+        if current_label in self.window_map:
+            self.current_hwnd = self.window_map[current_label]
+        else:
+            self.window_var.set(values[0])
+            self.current_hwnd = self.window_map[values[0]]
+
+        self._start_capture()
+
+    def _on_window_selected(self, _event: object) -> None:
+        label = self.window_var.get()
+        hwnd = self.window_map.get(label)
+        if hwnd is None:
+            self.current_hwnd = None
+            self._set_status("Window không còn tồn tại. Vui lòng refresh.")
+            return
+
+        self.current_hwnd = hwnd
+        self._start_capture()
+
+    def _on_client_only_changed(self) -> None:
+        if self.client_only_var.get():
+            self._hide_top_bar()
+        else:
+            self._show_top_bar()
+        self._start_capture()
+
+    def _hide_top_bar(self) -> None:
+        if self.top_bar_visible:
+            self.top_bar.pack_forget()
+            self.top_bar_visible = False
+
+    def _show_top_bar(self) -> None:
+        if not self.top_bar_visible:
+            self.top_bar.pack(fill="x", side="top")
+            self.top_bar_visible = True
+
+    def _start_capture(self) -> None:
+        if self.capture_job is not None:
+            self.root.after_cancel(self.capture_job)
+            self.capture_job = None
+        self._capture_once()
+
+    def _on_fullscreen_changed(self) -> None:
+        self.root.attributes("-fullscreen", self.fullscreen_var.get())
+
+    def _on_f11(self, _event: object | None = None) -> None:
+        self.fullscreen_var.set(not self.fullscreen_var.get())
+        self._on_fullscreen_changed()
+
+    def _on_fps_changed(self, _event: object | None = None) -> None:
+        # Re-schedule immediately so selected FPS takes effect now.
+        self._start_capture()
+
+    def _get_target_interval_ms(self) -> int:
+        try:
+            fps = max(1, int(self.fps_var.get()))
+        except ValueError:
+            fps = 60
+        return max(1, int(1000 / fps))
+
+    def _capture_once(self) -> None:
+        if self.current_hwnd is None or not win32gui.IsWindow(self.current_hwnd):
+            self._set_status("Window không hợp lệ hoặc đã đóng.")
+            self.capture_job = self.root.after(1000, self._capture_once)
+            return
+
+        if win32gui.IsIconic(self.current_hwnd):
+            self._set_status("Window đang bị minimize. Hãy restore để capture.")
+            self.capture_job = self.root.after(300, self._capture_once)
+            return
+
+        try:
+            frame = self._capture_window_image(self.current_hwnd)
+        except Exception as exc:
+            self._set_status(f"Lỗi capture: {exc}")
+            self.capture_job = self.root.after(300, self._capture_once)
+            return
+
+        if frame is None:
+            self._set_status("Không thể mirror window này (ứng dụng có thể chặn PrintWindow).")
+            self.capture_job = self.root.after(300, self._capture_once)
+            return
+
+        frame = self._fit_to_label(frame)
+        self.preview_image = ImageTk.PhotoImage(frame)
+        self.preview_label.configure(image=self.preview_image, text="")
+
+        self.capture_job = self.root.after(self._get_target_interval_ms(), self._capture_once)
+
+    def _capture_window_image(self, hwnd: int) -> Image.Image | None:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width = right - left
+        height = bottom - top
+        if width <= 0 or height <= 0:
+            return None
+
+        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        if not hwnd_dc:
+            return None
+
+        src_dc = None
+        mem_dc = None
+        bitmap = None
+        try:
+            src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            mem_dc = src_dc.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(src_dc, width, height)
+            mem_dc.SelectObject(bitmap)
+
+            # 0x00000002 = PW_RENDERFULLCONTENT, giúp mirror window tốt hơn.
+            result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0x00000002)
+            if result != 1:
+                result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), 0)
+            if result != 1:
+                return None
+
+            bmp_info = bitmap.GetInfo()
+            bmp_str = bitmap.GetBitmapBits(True)
+            image = Image.frombuffer(
+                "RGB",
+                (bmp_info["bmWidth"], bmp_info["bmHeight"]),
+                bmp_str,
+                "raw",
+                "BGRX",
+                0,
+                1,
+            )
+            frame = image.copy()
+            if self.client_only_var.get():
+                frame = self._crop_client_area(hwnd, frame)
+            return frame
+        finally:
+            if bitmap is not None:
+                win32gui.DeleteObject(bitmap.GetHandle())
+            if mem_dc is not None:
+                mem_dc.DeleteDC()
+            if src_dc is not None:
+                src_dc.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwnd_dc)
+
+    def _crop_client_area(self, hwnd: int, image: Image.Image) -> Image.Image:
+        try:
+            window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
+            client_rect = win32gui.GetClientRect(hwnd)
+            client_left_top = win32gui.ClientToScreen(hwnd, (0, 0))
+            client_right_bottom = win32gui.ClientToScreen(hwnd, (client_rect[2], client_rect[3]))
+        except Exception:
+            return image
+
+        crop_left = max(0, client_left_top[0] - window_left)
+        crop_top = max(0, client_left_top[1] - window_top)
+        crop_right = min(image.width, client_right_bottom[0] - window_left)
+        crop_bottom = min(image.height, client_right_bottom[1] - window_top)
+
+        if crop_right <= crop_left or crop_bottom <= crop_top:
+            return image
+        return image.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+    def _fit_to_label(self, image: Image.Image) -> Image.Image:
+        target_w = max(self.preview_label.winfo_width(), 100)
+        target_h = max(self.preview_label.winfo_height(), 100)
+
+        source_w, source_h = image.size
+        ratio = min(target_w / source_w, target_h / source_h)
+        new_size = (max(1, int(source_w * ratio)), max(1, int(source_h * ratio)))
+        resample = Image.Resampling.BILINEAR
+        try:
+            if int(self.fps_var.get()) <= 30:
+                resample = Image.Resampling.LANCZOS
+        except ValueError:
+            pass
+        return image.resize(new_size, resample)
+
+    def _set_status(self, text: str) -> None:
+        self.preview_label.configure(image="", text=text)
+
+    def _on_escape(self, _event: object | None = None) -> None:
+        if self.client_only_var.get() and not self.top_bar_visible:
+            self._show_top_bar()
+            return
+        if self.fullscreen_var.get():
+            self.fullscreen_var.set(False)
+            self._on_fullscreen_changed()
+            return
+        self._exit_app()
+
+    def _exit_app(self) -> None:
+        if self.capture_job is not None:
+            self.root.after_cancel(self.capture_job)
+        self.root.destroy()
+
+
+def main() -> None:
+    root = tk.Tk()
+    app = WindowCaptureApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
+</body>
+</html>
